@@ -1,16 +1,16 @@
 package com.jojo.head_up_banner
 
 import androidx.compose.animation.core.*
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.ExperimentalMaterialApi
 import androidx.compose.material.Icon
 import androidx.compose.material.IconButton
-import androidx.compose.material.MaterialTheme
+import androidx.compose.material.Surface
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.runtime.*
@@ -21,10 +21,8 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.AccessibilityManager
 import androidx.compose.ui.platform.LocalAccessibilityManager
-import androidx.compose.ui.semantics.LiveRegionMode
-import androidx.compose.ui.semantics.dismiss
-import androidx.compose.ui.semantics.liveRegion
-import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.*
@@ -42,11 +40,28 @@ class HeadUpBannerHostState {
     suspend fun showHeadUpBanner(
         content: @Composable () -> Unit,
         closeable: Boolean = false,
-        icon: @Composable () -> Unit = {}
+        clickable: Boolean = false,
+        icon: (@Composable () -> Unit)? = null,
+        duration: HeadUpBannerDuration = HeadUpBannerDuration.Normal
     ): HeadUpBannerResult = mutex.withLock {
         try {
             return suspendCancellableCoroutine { continuation ->
-                currentHeadUpBannerData = HeadUpDataImpl(content, closeable, icon, continuation)
+                currentHeadUpBannerData = HeadUpDataImpl(
+                    content = content,
+                    closeable = if (closeable) {
+                        {
+                            currentHeadUpBannerData?.dismiss()
+                        }
+                    } else null,
+                    clickable = if (clickable) {
+                        {
+                            currentHeadUpBannerData?.onClick()
+                        }
+                    } else null,
+                    icon = icon,
+                    continuation = continuation,
+                    duration = duration
+                )
             }
         } finally {
             currentHeadUpBannerData = null
@@ -56,14 +71,14 @@ class HeadUpBannerHostState {
     @OptIn(ExperimentalCoroutinesApi::class)
     private class HeadUpDataImpl(
         override val content: @Composable () -> Unit,
-        override val closeable: Boolean,
-        override val icon: @Composable () -> Unit,
-        private val continuation: CancellableContinuation<HeadUpBannerResult>,
+        override val icon: (@Composable () -> Unit)?,
+        override val closeable: (() -> Unit)?,
+        override val clickable: (() -> Unit)? = null,
         override val duration: HeadUpBannerDuration = HeadUpBannerDuration.Normal,
-        override val clickable: Boolean = false
+        private val continuation: CancellableContinuation<HeadUpBannerResult>
     ) : HeadUpBannerData {
         override fun onClick() {
-            if (clickable && continuation.isActive) continuation.resume(HeadUpBannerResult.Clicked) {}
+            if (clickable != null && continuation.isActive) continuation.resume(HeadUpBannerResult.Clicked) {}
         }
 
         override fun dismiss() {
@@ -80,26 +95,26 @@ fun HeadUpBannerHost(
         HeadUpBanner(
             modifier = modifier,
             icon = it.icon,
-            onClick = {},
-            canClose = it.closeable,
+            onClick = it.clickable,
+            onClose = it.closeable,
             content = it.content
         )
     }
 ) {
-    val currentHeadUpBannerDataList = hostState.currentHeadUpBannerData
+    val currentHeadUpBannerData = hostState.currentHeadUpBannerData
     val accessibilityManager = LocalAccessibilityManager.current
 
-    LaunchedEffect(currentHeadUpBannerDataList) {
-        if (currentHeadUpBannerDataList != null) {
-            val duration = currentHeadUpBannerDataList.duration.toMillis(
-                currentHeadUpBannerDataList.closeable,
+    LaunchedEffect(currentHeadUpBannerData) {
+        currentHeadUpBannerData?.let {
+            val duration = currentHeadUpBannerData.duration.toMillis(
+                currentHeadUpBannerData.closeable != null,
                 accessibilityManager
             )
             delay(duration)
-            currentHeadUpBannerDataList.dismiss()
+            currentHeadUpBannerData.dismiss()
         }
     }
-    FadeInFadeOutWithScale(
+    SlideInSlideOut(
         current = hostState.currentHeadUpBannerData,
         modifier = modifier,
         content = headUpBanner
@@ -108,9 +123,9 @@ fun HeadUpBannerHost(
 
 interface HeadUpBannerData {
     val content: @Composable () -> Unit
-    val closeable: Boolean
-    val clickable: Boolean
-    val icon: @Composable () -> Unit
+    val closeable: (() -> Unit)?
+    val clickable: (() -> Unit)?
+    val icon: (@Composable () -> Unit)?
     val duration: HeadUpBannerDuration
 
     fun onClick()
@@ -133,9 +148,9 @@ internal fun HeadUpBannerDuration.toMillis(
     accessibilityManager: AccessibilityManager?
 ): Long {
     val original = when (this) {
-        HeadUpBannerDuration.Normal -> 3000L
+        HeadUpBannerDuration.Normal -> 4000L
         HeadUpBannerDuration.Long -> 7000L
-    }
+    } + HeadUpBannerInBetweenDelayMillis
     if (accessibilityManager == null)
         return original
 
@@ -147,66 +162,57 @@ internal fun HeadUpBannerDuration.toMillis(
 }
 
 @Composable
-fun FadeInFadeOutWithScale(
+fun SlideInSlideOut(
     current: HeadUpBannerData?,
     modifier: Modifier = Modifier,
     content: @Composable (HeadUpBannerData) -> Unit
 ) {
-    val state = remember { FadeInFadeOutState<HeadUpBannerData?>() }
+    val state = remember { SlideInSlideOutState<HeadUpBannerData?>() }
+
     if (current != state.current) {
         state.current = current
         val keys = state.items.map { it.key }.toMutableList()
-        if (!keys.contains(current)) {
-            keys.add(current)
-        }
+        if (!keys.contains(current)) keys.add(current)
         state.items.clear()
         keys.filterNotNull().mapTo(state.items) { key ->
-            FadeInFadeOutAnimationItem(key) { children ->
+            SlideInSlideOutAnimationItem(key) { children ->
                 val isVisible = key == current
                 val duration =
-                    if (isVisible) HeadUpBannerFadeInMillis else HeadUpBannerFadeOutMillis
-                val delay = HeadUpBannerFadeOutMillis + HeadUpBannerInBetweenDelayMillis
+                    if (isVisible) HeadUpBannerSlideInMillis else HeadUpBannerSlideOutMillis
+                val delay = HeadUpBannerSlideOutMillis + HeadUpBannerInBetweenDelayMillis
                 val animationDelay = if (isVisible && keys.filterNotNull().size != 1) delay else 0
-                val opacity = animatedOpacity(
-                    animation = tween(
-                        easing = LinearEasing,
-                        delayMillis = animationDelay,
-                        durationMillis = duration
-                    ),
+                val opacity = animatedOpacity(animation = tween(
+                    easing = EaseOut,
+                    delayMillis = animationDelay,
+                    durationMillis = duration
+                ),
                     visible = isVisible,
                     onAnimationFinish = {
                         if (key != state.current) {
                             state.items.removeAll { it.key == key }
                             state.scope?.invalidate()
                         }
-                    }
-                )
-                val scale = animatedScale(
+                    })
+                val translation = animatedTranslation(
                     animation = tween(
-                        easing = FastOutSlowInEasing,
+                        easing = EaseOut,
                         delayMillis = animationDelay,
                         durationMillis = duration
                     ),
                     visible = isVisible
                 )
                 Box(
-                    Modifier.graphicsLayer(
-                        scaleX = scale.value,
-                        scaleY = scale.value,
+                    modifier = Modifier.graphicsLayer(
+                        translationY = translation.value,
                         alpha = opacity.value
-                    ).semantics {
-                        liveRegion = LiveRegionMode.Polite
-                        dismiss {
-                            key.dismiss()
-                            true
-                        }
-                    }
+                    )
                 ) {
                     children()
                 }
             }
         }
     }
+
     Box(modifier) {
         state.scope = currentRecomposeScope
         state.items.forEach { (item, opacity) ->
@@ -219,19 +225,32 @@ fun FadeInFadeOutWithScale(
     }
 }
 
-private class FadeInFadeOutState<T> {
-    // we use Any here as something which will not be equals to the real initial value
+private class SlideInSlideOutState<T> {
     var current: Any? = Any()
-    var items = mutableListOf<FadeInFadeOutAnimationItem<T>>()
+    var items = mutableListOf<SlideInSlideOutAnimationItem<T>>()
     var scope: RecomposeScope? = null
 }
 
-private data class FadeInFadeOutAnimationItem<T>(
+private data class SlideInSlideOutAnimationItem<T>(
     val key: T,
-    val transition: FadeInFadeOutTransition
+    val transition: SlideInSlideOutTransition
 )
 
-private typealias FadeInFadeOutTransition = @Composable (content: @Composable () -> Unit) -> Unit
+private typealias SlideInSlideOutTransition = @Composable (content: @Composable () -> Unit) -> Unit
+
+@Composable
+private fun animatedTranslation(animation: AnimationSpec<Float>, visible: Boolean): State<Float> {
+    val outside = with(LocalDensity.current) { 60.dp.toPx() }
+
+    val translation = remember { Animatable(if (!visible) 0f else -outside) }
+    LaunchedEffect(visible) {
+        translation.animateTo(
+            if (visible) 0f else -outside,
+            animationSpec = animation
+        )
+    }
+    return translation.asState()
+}
 
 @Composable
 private fun animatedOpacity(
@@ -250,89 +269,102 @@ private fun animatedOpacity(
     return alpha.asState()
 }
 
-@Composable
-private fun animatedScale(animation: AnimationSpec<Float>, visible: Boolean): State<Float> {
-    val scale = remember { Animatable(if (!visible) 1f else 0.8f) }
-    LaunchedEffect(visible) {
-        scale.animateTo(
-            if (visible) 1f else 0.8f,
-            animationSpec = animation
-        )
-    }
-    return scale.asState()
-}
-
+@OptIn(ExperimentalMaterialApi::class)
 @Composable
 fun HeadUpBanner(
     modifier: Modifier = Modifier,
-    icon: @Composable () -> Unit = {},
+    icon: (@Composable () -> Unit)? = null,
     onClick: (() -> Unit)? = null,
-    canClose: Boolean = false,
+    onClose: (() -> Unit)? = null,
     content: @Composable () -> Unit
 ) {
     val coroutineScope = rememberCoroutineScope()
-    var visible by remember { mutableStateOf(true) }
     val offsetX = remember { Animatable(0f) }
 
-    if (visible)
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        elevation = 2.dp,
+        onClick = {
+            onClick?.invoke()
+        },
+        enabled = onClick != null,
+        modifier = Modifier
+            .padding(8.dp)
+            .offset { IntOffset(offsetX.value.roundToInt(), 0) }
+            .condition(!isSystemInDarkTheme(), { shadow(4.dp, RoundedCornerShape(8.dp)) })
+            .clip(RoundedCornerShape(8.dp))
+            .fillMaxWidth()
+            .draggable(
+                enabled = onClose != null,
+                orientation = Orientation.Horizontal,
+                state = rememberDraggableState { delta ->
+                    onClose.let {
+                        coroutineScope.launch {
+                            offsetX.snapTo(offsetX.value + delta)
+                        }
+                    }
+                },
+                onDragStopped = {
+                    if (offsetX.value > 300f) {
+                        coroutineScope.launch {
+                            val offsetResult = offsetX.animateTo(
+                                Float.MAX_VALUE,
+                                animationSpec = tween(durationMillis = 500)
+                            )
+                            if (offsetResult.endReason == AnimationEndReason.Finished) {
+                                onClose?.invoke()
+                            }
+                        }
+                    } else
+                        coroutineScope.launch {
+                            offsetX.animateTo(
+                                targetValue = 0f,
+                                animationSpec = tween(durationMillis = 500)
+                            )
+                        }
+                }
+            )
+    ) {
         Row(
             modifier = Modifier
-                .padding(8.dp)
-                .offset { IntOffset(offsetX.value.roundToInt(), 0) }
-                .draggable(
-                    orientation = Orientation.Horizontal,
-                    state = rememberDraggableState { delta ->
-                        if (canClose)
-                            coroutineScope.launch {
-                                offsetX.snapTo(offsetX.value + delta)
-                            }
-                    },
-                    onDragStopped = {
-                        if (offsetX.value > 500f) {
-                            coroutineScope.launch {
-                                val offsetResult = offsetX.animateTo(
-                                    1000f,
-                                    animationSpec = tween(durationMillis = 500)
-                                )
-                                if (offsetResult.endReason == AnimationEndReason.Finished) {
-                                    visible = false
-                                }
-                            }
-                        } else
-                            coroutineScope.launch {
-                                offsetX.animateTo(
-                                    targetValue = 0f,
-                                    animationSpec = tween(durationMillis = 500)
-                                )
-                            }
-                    }
-                )
                 .height(60.dp)
-                .fillMaxWidth()
-                .shadow(4.dp, RoundedCornerShape(8.dp))
-                .background(MaterialTheme.colors.surface, RoundedCornerShape(8.dp))
-                .clip(RoundedCornerShape(8.dp))
-                .apply {
-                    onClick?.let {
-                        clickable { it() }
-                    }
-                }
-                .padding(8.dp)
+                .padding(vertical = 8.dp, horizontal = 12.dp)
                 .then(modifier),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            icon()
-            Row(Modifier.weight(.8f)) {
+            icon?.let {
+                it()
+            }
+            Row(Modifier.weight(1f)) {
                 content()
             }
-            if (canClose)
-                IconButton(onClick = { visible = false }, modifier = Modifier.weight(.1f)) {
-                    Icon(Icons.Default.Close, contentDescription = "")
+            onClose?.let {
+                IconButton(onClick = {
+                    onClose()
+                }, modifier = Modifier.weight(.1f)) {
+                    Icon(
+                        Icons.Default.Close,
+                        contentDescription = stringResource(id = R.string.action_close)
+                    )
                 }
+            }
         }
+    }
 }
 
-private const val HeadUpBannerFadeInMillis = 200
-private const val HeadUpBannerFadeOutMillis = 100
-private const val HeadUpBannerInBetweenDelayMillis = 0
+fun Modifier.condition(
+    condition: Boolean,
+    ifTrue: Modifier.() -> Modifier,
+    ifFalse: (Modifier.() -> Modifier)? = null
+): Modifier = if (condition) {
+    then(ifTrue(Modifier))
+} else if (ifFalse != null) {
+    then(ifFalse(Modifier))
+} else {
+    this
+}
+
+private const val HeadUpBannerSlideInMillis = 200
+private const val HeadUpBannerSlideOutMillis = 100
+private const val HeadUpBannerInBetweenDelayMillis = 500
