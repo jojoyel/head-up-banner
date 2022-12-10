@@ -10,7 +10,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.zIndex
 
 class HeadUpDisplayerState(
@@ -18,7 +17,7 @@ class HeadUpDisplayerState(
 )
 
 @Composable
-fun rememberHeadUpScaffoldState(
+fun rememberHeadUpDisplayerState(
     headUpBannerHostState: HeadUpBannerHostState = remember { HeadUpBannerHostState() }
 ): HeadUpDisplayerState = remember {
     HeadUpDisplayerState(headUpBannerHostState)
@@ -27,7 +26,7 @@ fun rememberHeadUpScaffoldState(
 @Composable
 fun HeadUpDisplayer(
     modifier: Modifier = Modifier,
-    headUpScaffoldState: HeadUpDisplayerState = rememberHeadUpScaffoldState(),
+    headUpDisplayerState: HeadUpDisplayerState = rememberHeadUpDisplayerState(),
     headUpBannerHost: @Composable (HeadUpBannerHostState) -> Unit = { HeadUpBannerHost(hostState = it) },
     backgroundColor: Color = MaterialTheme.colors.background,
     content: @Composable () -> Unit
@@ -36,7 +35,7 @@ fun HeadUpDisplayer(
         Surface(modifier = childModifier, color = backgroundColor) {
             HeadUpDisplayerLayout(
                 content = content,
-                headUpBanner = { headUpBannerHost(headUpScaffoldState.headUpBannerHostState) }
+                headUpBanner = { headUpBannerHost(headUpDisplayerState.headUpBannerHostState) }
             )
         }
     }
