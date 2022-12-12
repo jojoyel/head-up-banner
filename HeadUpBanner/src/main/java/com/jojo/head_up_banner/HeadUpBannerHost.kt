@@ -182,7 +182,7 @@ fun SlideInSlideOut(
                 val delay = HeadUpBannerSlideOutMillis + HeadUpBannerInBetweenDelayMillis
                 val animationDelay = if (isVisible && keys.filterNotNull().size != 1) delay else 0
                 val opacity = animatedOpacity(animation = tween(
-                    easing = EaseOut,
+                    easing = LinearEasing,
                     delayMillis = animationDelay,
                     durationMillis = duration
                 ),
@@ -195,7 +195,7 @@ fun SlideInSlideOut(
                     })
                 val translation = animatedTranslation(
                     animation = tween(
-                        easing = EaseOut,
+                        easing = LinearEasing,
                         delayMillis = animationDelay,
                         durationMillis = duration
                     ),

@@ -22,8 +22,8 @@ val displayerState = rememberHeadUpDisplayerState()
 
 HeadUpDisplayer(headUpDisplayerState = displayerState) {
     // Display your content
-    NavHost(...) {
-    ...
+    NavHost(..) {
+    ..
 }
 }
 
@@ -44,9 +44,9 @@ settings.gradle
 
 ```gradle
 dependencyResolutionManagement {
-    ...
+    ..
     repositories {
-        ...
+        ..
         maven { url 'https://jitpack.io' }       
     }
 }
